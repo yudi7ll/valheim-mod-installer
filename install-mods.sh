@@ -53,3 +53,5 @@ rm -rf "$MOD_DIR"/* "$CACHE"
 while IFS=/ read -r author name; do
   install_mod "$author" "$name" 0
 done < "$MODS_FILE"
+
+rm -rf "$CACHE"
