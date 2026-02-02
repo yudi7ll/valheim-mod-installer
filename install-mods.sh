@@ -36,7 +36,7 @@ install_mod() {
   modpath="$MOD_DIR/$key"
 
   wget -q "$download_url" -O "$filepath"
-  unzip -q "$filepath" -d "$modpath"
+  bsdtar -xf "$filepath" -C "$modpath"
 
   echo "$dependencies" | while read dep; do
     if [ -z "$dep" ]; then
