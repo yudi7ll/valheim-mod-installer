@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-MOD_DIR="./mods"
+MOD_DIR="./valheim/serverfiles/BepInEx/plugins"
 CACHE="./cache"
 MODS_FILE="./mods.txt"
 API_BASE="https://thunderstore.io/api/experimental/package"
