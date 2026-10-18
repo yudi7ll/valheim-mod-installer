@@ -268,6 +268,83 @@ def read_mods(path):
     return entries
 
 
+def save_state(state_path, state):
+    tmp = state_path.with_suffix('.json.tmp')
+    tmp.write_text(json.dumps(state, indent=2) + '\n')
+    tmp.replace(state_path)
+
+
+def prune_unrequested_mods(target, state_path, state, selected, apply):
+    """Remove updater-managed packages no longer requested or required."""
+    plugins_dir = target / 'BepInEx' / 'plugins'
+    active = set()
+    protected_dirs = set()
+    for key, (_, package, version) in selected.items():
+        if is_modpack(package, version):
+            continue
+        active.add(key)
+        dest_id = re.sub(r'[^A-Za-z0-9_.-]', '_', package['full_name'])
+        protected_dirs.add(dest_id.casefold())
+
+    stale = sorted(key for key in state
+                   if key != '__bepinex__' and key not in active)
+    failed = 0
+    for key in stale:
+        record = state.get(key, {})
+        if not isinstance(record, dict):
+            record = {}
+        dest_id = record.get('plugin_dir')
+        if dest_id is None:
+            # Older state files did not record the directory's original casing.
+            dest_id = re.sub(r'[^A-Za-z0-9_.-]', '_', key)
+        if (not isinstance(dest_id, str) or not dest_id or dest_id in ('.', '..')
+                or '/' in dest_id or '\\' in dest_id):
+            print(f'FAILED  REMOVE {key}: invalid managed plugin directory', file=sys.stderr)
+            failed += 1
+            continue
+        if dest_id.casefold() in protected_dirs:
+            print(f'FAILED  REMOVE {key}: plugin directory is still used by a requested mod',
+                  file=sys.stderr)
+            failed += 1
+            continue
+        if plugins_dir.is_symlink():
+            print(f'FAILED  REMOVE {key}: plugins directory is a symlink; refusing cleanup',
+                  file=sys.stderr)
+            failed += 1
+            continue
+
+        try:
+            matches = []
+            if plugins_dir.is_dir():
+                matches = [entry for entry in plugins_dir.iterdir()
+                           if entry.name.casefold() == dest_id.casefold()]
+            if len(matches) > 1:
+                raise RuntimeError(f'ambiguous plugin directory name {dest_id!r}')
+            plugin_dir = matches[0] if matches else plugins_dir / dest_id
+            present = plugin_dir.exists() or plugin_dir.is_symlink()
+            if not apply:
+                detail = str(plugin_dir) if present else 'plugin directory absent'
+                print(f'REMOVE  {key}: {detail}; would clear state entry (dry-run)')
+                continue
+
+            if plugin_dir.is_symlink():
+                plugin_dir.unlink()
+            elif plugin_dir.exists():
+                if not plugin_dir.is_dir():
+                    raise RuntimeError(f'{plugin_dir} is not a directory')
+                shutil.rmtree(plugin_dir)
+            state.pop(key, None)
+            save_state(state_path, state)
+            if present:
+                print(f'REMOVE  {key}: removed {plugin_dir}; state entry cleared (config preserved)')
+            else:
+                print(f'REMOVE  {key}: plugin directory absent; state entry cleared')
+        except Exception as e:
+            print(f'FAILED  REMOVE {key}: {e}', file=sys.stderr)
+            failed += 1
+    return failed
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--server', type=Path, required=True, help='Valheim server game root')
@@ -320,7 +397,7 @@ def main():
 
     # --- Mod installation / update ---
     selected = plan_mods(index, requested, args.prefer)
-    failed = 0
+    failed = prune_unrequested_mods(target, state_path, state, selected, args.apply)
     for key, (source, package, version) in sorted(selected.items()):
         if is_modpack(package, version):
             print(f'SKIP    {package["full_name"]}: modpack dependencies are installed individually')
@@ -340,7 +417,7 @@ def main():
             data = fetch(version['download_url'], MAX_ZIP)
             dest_id = re.sub(r'[^A-Za-z0-9_.-]', '_', package['full_name'])
             install_zip(data, target, dest_id)
-            state[key] = {'version': ver, 'source': source}
+            state[key] = {'version': ver, 'source': source, 'plugin_dir': dest_id}
             tmp = state_path.with_suffix('.json.tmp')
             tmp.write_text(json.dumps(state, indent=2) + '\n')
             tmp.replace(state_path)
